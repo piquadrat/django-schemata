@@ -1,33 +1,58 @@
-import os, re
+import os, re, sys
 
 from django.conf import settings
+from django.db.backends.util import CursorWrapper
+from django.db.backends import BaseDatabaseClient
 from django.utils.importlib import import_module
 from django.core.exceptions import ImproperlyConfigured
 
 ORIGINAL_BACKEND = getattr(settings, 'ORIGINAL_BACKEND', 'django.db.backends.postgresql_psycopg2')
+DEFAULT_SCHEMA = getattr(settings, 'SCHEMATA_DEFAULT_SCHEMA', None)
 
 original_backend = import_module('.base', ORIGINAL_BACKEND)
 
 # from the postgresql doc
-SQL_IDENTIFIER_RE = re.compile('^[_a-zA-Z][_a-zA-Z0-9]{,62}$')
+SQL_IDENTIFIER_RE = re.compile('^[_a-zA-Z][_a-zA-Z0-9]{1,62}$')
 
 def _check_identifier(identifier):
     if not SQL_IDENTIFIER_RE.match(identifier):
         raise RuntimeError("Invalid string used for the schema name.")
 
+
+class DatabaseClient(BaseDatabaseClient):
+    executable_name = 'psql'
+
+    def runshell(self):
+        settings_dict = self.connection.settings_dict
+        args = [self.executable_name]
+        if settings_dict['USER']:
+            args += ["-U", settings_dict['USER']]
+        if settings_dict['HOST']:
+            args.extend(["-h", settings_dict['HOST']])
+        if settings_dict['PORT']:
+            args.extend(["-p", str(settings_dict['PORT'])])
+        args += [settings_dict['NAME']]
+        if self.connection.schema_name and self.connection.schema_name != 'public':
+            os.putenv('PGOPTIONS', "--search_path=%s,public" % self.connection.schema_name)
+        if os.name == 'nt':
+            sys.exit(os.system(" ".join(args)))
+        else:
+            os.execvp(self.executable_name, args)
+
+
 class DatabaseWrapper(original_backend.DatabaseWrapper):
     def __init__(self, *args, **kwargs):
-        super(DatabaseWrapper, self).__init__(*args, **kwargs)
-
         # By default the schema is not set
-        self.schema_name = None
+        self.schema_name = DEFAULT_SCHEMA
 
         # but one can change the default using the environment variable.
         force_domain = os.getenv('DJANGO_SCHEMATA_DOMAIN')
         if force_domain:
             self.schema_name = self._resolve_schema_domain(force_domain)['schema_name']
+        super(DatabaseWrapper, self).__init__(*args, **kwargs)
+        self.client = DatabaseClient(self)
 
-    def _resolve_schema_domain(self, domain_name):
+    def _resolve_schema_domain(self, domain_name='default'):
         try:
             sd = settings.SCHEMATA_DOMAINS[domain_name]
         except KeyError:
