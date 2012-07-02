@@ -16,7 +16,7 @@ DESC = " ".join(__import__('django_schemata').__doc__.splitlines()).strip()
 
 setup(
     name = "django-schemata",
-    version = get_git_version(),
+    version = '0.1',
     url = 'https://github.com/tuttle/django-schemata',
     author = 'Vlada Macek',
     author_email = 'macek@sandbox.cz',
